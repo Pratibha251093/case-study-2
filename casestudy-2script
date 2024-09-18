@@ -1,0 +1,420 @@
+# main.tf
+
+provider "aws" {
+  region     = "us-east-2"  # Adjust to your preferred region
+
+}
+
+# Create a VPC
+resource "aws_vpc" "blue_green_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "blue-green-vpc"
+  }
+}
+
+# Create Public Subnets
+resource "aws_subnet" "blue_green_subnet_public_1" {
+  vpc_id            = aws_vpc.blue_green_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-2a"
+
+  tags = {
+    Name = "blue-green-public-subnet-1"
+  }
+}
+
+resource "aws_subnet" "blue_green_subnet_public_2" {
+  vpc_id            = aws_vpc.blue_green_vpc.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "us-east-2b"
+
+  tags = {
+    Name = "blue-green-public-subnet-2"
+  }
+}
+
+# Create Internet Gateway
+resource "aws_internet_gateway" "blue_green_igw" {
+  vpc_id = aws_vpc.blue_green_vpc.id
+
+  tags = {
+    Name = "blue-green-igw"
+  }
+}
+
+# Route Table and Routes
+resource "aws_route_table" "blue_green_route_table" {
+  vpc_id = aws_vpc.blue_green_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.blue_green_igw.id
+  }
+
+  tags = {
+    Name = "blue-green-route-table"
+  }
+}
+
+resource "aws_route_table_association" "public_subnet_1_association" {
+  subnet_id      = aws_subnet.blue_green_subnet_public_1.id
+  route_table_id = aws_route_table.blue_green_route_table.id
+}
+
+resource "aws_route_table_association" "public_subnet_2_association" {
+  subnet_id      = aws_subnet.blue_green_subnet_public_2.id
+  route_table_id = aws_route_table.blue_green_route_table.id
+}
+
+# ALB for Blue Environment
+resource "aws_lb" "blue_alb" {
+  name               = "blue-environment-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = [aws_subnet.blue_green_subnet_public_1.id, aws_subnet.blue_green_subnet_public_2.id]
+
+  tags = {
+    Name = "blue-alb"
+  }
+}
+
+# ALB for Green Environment
+resource "aws_lb" "green_alb" {
+  name               = "green-environment-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = [aws_subnet.blue_green_subnet_public_1.id, aws_subnet.blue_green_subnet_public_2.id]
+
+  tags = {
+    Name = "green-alb"
+  }
+}
+# Target Group for Blue Environment
+resource "aws_lb_target_group" "blue_tg" {
+  name     = "blue-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.blue_green_vpc.id
+
+  health_check {
+    path                = "/"  # Adjust this path according to your application's health check endpoint
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    protocol            = "HTTP"
+    port                = "80"
+  }
+}
+
+# Target Group for Green Environment
+resource "aws_lb_target_group" "green_tg" {
+  name     = "green-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.blue_green_vpc.id
+
+  health_check {
+    path                = "/"  # Adjust this path according to your application's health check endpoint
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    protocol            = "HTTP"
+    port                = "80"
+  }
+}
+
+# ALB Listener for Blue Environment
+resource "aws_lb_listener" "blue_listener" {
+  load_balancer_arn = aws_lb.blue_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.blue_tg.arn
+  }
+
+  tags = {
+    Name = "blue-listener"
+  }
+}
+
+# ALB Listener for Green Environment
+resource "aws_lb_listener" "green_listener" {
+  load_balancer_arn = aws_lb.green_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.green_tg.arn
+  }
+
+  tags = {
+    Name = "green-listener"
+  }
+}
+
+
+# ALB Security Group
+resource "aws_security_group" "alb_sg" {
+  vpc_id = aws_vpc.blue_green_vpc.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alb-sg"
+  }
+}
+
+# Security Group for EC2 instances
+resource "aws_security_group" "ec2_sg" {
+  vpc_id = aws_vpc.blue_green_vpc.id
+
+  ingress {
+    from_port   = 22  # SSH Access
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 80  # HTTP Access
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443  # HTTPS Access
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "ec2-sg"
+  }
+}
+
+/*# Target Group for Blue Environment
+resource "aws_lb_target_group" "blue_tg" {
+  name     = "blue-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.blue_green_vpc.id
+}
+
+# Target Group for Green Environment
+resource "aws_lb_target_group" "green_tg" {
+  name     = "green-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.blue_green_vpc.id
+}
+*/
+# Launch Configuration for Blue ASG
+resource "aws_launch_configuration" "blue_launch_config" {
+  name          = "blue-launch-config"
+  image_id      = "ami-0453ce6279422709a" # Example Amazon Linux AMI
+  instance_type = "t2.micro"
+  key_name = "casestudy-2"
+  security_groups = [aws_security_group.ec2_sg.id]
+
+
+ user_data = <<-EOF
+    #!/bin/bash
+    echo "Blue environment setup" > /var/www/html/index.html
+  EOF
+
+}
+
+# Auto Scaling Group for Blue
+resource "aws_autoscaling_group" "blue_asg" {
+  desired_capacity     = 2
+  max_size             = 3
+  min_size             = 1
+  launch_configuration = aws_launch_configuration.blue_launch_config.id
+  vpc_zone_identifier  = [aws_subnet.blue_green_subnet_public_1.id, aws_subnet.blue_green_subnet_public_2.id]
+  target_group_arns    = [aws_lb_target_group.blue_tg.arn]
+
+  tag {
+    key                 = "Name"
+    value               = "Blue Environment ASG"
+    propagate_at_launch = true
+  }
+}
+
+# Launch Configuration for Green ASG
+resource "aws_launch_configuration" "green_launch_config" {
+  name          = "green-launch-config"
+  image_id      = "ami-0453ce6279422709a" # Example Amazon Linux AMI
+  instance_type = "t2.micro"
+  key_name = "casestudy-2"
+  security_groups = [aws_security_group.ec2_sg.id]
+ 
+
+ user_data = <<-EOF
+    #!/bin/bash
+    echo "Blue environment setup" > /var/www/html/index.html
+  EOF
+
+}
+
+# Auto Scaling Group for Green
+resource "aws_autoscaling_group" "green_asg" {
+  desired_capacity     = 2
+  max_size             = 3
+  min_size             = 1
+  launch_configuration = aws_launch_configuration.green_launch_config.id
+  vpc_zone_identifier  = [aws_subnet.blue_green_subnet_public_1.id, aws_subnet.blue_green_subnet_public_2.id]
+  target_group_arns    = [aws_lb_target_group.green_tg.arn]
+
+  tag {
+    key                 = "Name"
+    value               = "Green Environment ASG"
+    propagate_at_launch = true
+  }
+}
+
+# Create Route 53 Hosted Zone
+resource "aws_route53_zone" "example_zone" {
+  name = "pratibhabhosalepb.online"  # Replace with your domain name
+}
+
+
+# Route 53 Record for Blue Environment
+resource "aws_route53_record" "blue_record" {
+  zone_id = aws_route53_zone.example_zone.id
+  name    = "app.pratibhabhosalepb.online"
+  type    = "A"  # Specify the type of the record
+
+  alias {
+    name                   = aws_lb.blue_alb.dns_name
+    zone_id                = aws_lb.blue_alb.zone_id
+    evaluate_target_health = true
+  }
+
+  set_identifier = "blue-environment"
+  weighted_routing_policy {
+    weight = 80
+  }
+}
+
+# Route 53 Record for Green Environment
+resource "aws_route53_record" "green_record" {
+  zone_id = aws_route53_zone.example_zone.id
+  name    = "pratibhabhosalepb.online"
+  type    = "A"  # Specify the type of the record
+
+  alias {
+    name                   = aws_lb.green_alb.dns_name
+    zone_id                = aws_lb.green_alb.zone_id
+    evaluate_target_health = true
+  }
+
+  set_identifier = "green-environment"
+  weighted_routing_policy {
+    weight = 20
+  }
+}
+# RDS Instance (backend database)
+resource "aws_db_instance" "blue_green_rds" {
+  allocated_storage    = 20
+  storage_type         = "gp2"
+  engine               = "mysql"
+  engine_version       = "8.0.35"  # Ensure this version is supported with the chosen instance class
+  instance_class       = "db.t3.micro"  # Updated to a more commonly supported instance class
+  db_name              = "bluegreendb"
+  username             = "admin"
+  password             = "password123"  # Replace with secure values or use Terraform variables
+  db_subnet_group_name = aws_db_subnet_group.blue_green_rds_subnet_group.name
+  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+
+  skip_final_snapshot = true
+
+  tags = {
+    Name = "blue-green-rds"
+  }
+}
+
+
+# Define the DB Subnet Group for the RDS instance
+resource "aws_db_subnet_group" "blue_green_rds_subnet_group" {
+  name       = "blue-green-rds-subnet-group"
+  
+  # Use the existing subnet resources
+  subnet_ids = [aws_subnet.blue_green_subnet_public_1.id, aws_subnet.blue_green_subnet_public_2.id]
+
+  tags = {
+    Name = "blue-green-rds-subnet-group"
+  }
+}
+
+# Fix for ACM Certificate Validation (Route53)
+resource "aws_route53_record" "blue_green_cert_validation" {
+  for_each = { for dvo in aws_acm_certificate.blue_green_cert.domain_validation_options : dvo.domain_name => dvo }
+
+  name    = each.value.resource_record_name
+  type    = each.value.resource_record_type
+  zone_id = aws_route53_zone.example_zone.id
+  records = [each.value.resource_record_value]
+  ttl     = 60
+}
+
+# Fix for AutoScaling Policies (blue and green environments)
+resource "aws_autoscaling_policy" "blue_asg_scale_out" {
+  name                   = "blue-asg-scale-out"
+  scaling_adjustment      = 1
+  adjustment_type         = "ChangeInCapacity"
+  autoscaling_group_name  = aws_autoscaling_group.blue_asg.name
+}
+
+resource "aws_autoscaling_policy" "green_asg_scale_out" {
+  name                   = "green-asg-scale-out"
+  scaling_adjustment      = 1
+  adjustment_type         = "ChangeInCapacity"
+  autoscaling_group_name  = aws_autoscaling_group.green_asg.name
+}
+
+# ACM certificate definition
+resource "aws_acm_certificate" "blue_green_cert" {
+  domain_name       = "pratibhabhosalepb.online"  
+  validation_method = "DNS"
+
+  tags = {
+    Name = "blue-green-cert"
+  }
+}
