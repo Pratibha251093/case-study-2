@@ -1,7 +1,7 @@
 # main.tf
 
 provider "aws" {
-  region     = "us-east-2"  # Adjust to your preferred region
+  region     = "us-east-2"  
 
 }
 
@@ -354,7 +354,7 @@ resource "aws_route53_record" "green_record" {
 
 
 
-# Fix for ACM Certificate Validation (Route53)
+#ACM Certificate Validation (Route53)
 resource "aws_route53_record" "blue_green_cert_validation" {
   for_each = { for dvo in aws_acm_certificate.blue_green_cert.domain_validation_options : dvo.domain_name => dvo }
 
@@ -365,7 +365,7 @@ resource "aws_route53_record" "blue_green_cert_validation" {
   ttl     = 60
 }
 
-# Fix for AutoScaling Policies (blue and green environments)
+# AutoScaling Policies (blue and green environments)
 resource "aws_autoscaling_policy" "blue_asg_scale_out" {
   name                   = "blue-asg-scale-out"
   scaling_adjustment      = 1
